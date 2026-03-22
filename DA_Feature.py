@@ -21,7 +21,7 @@ num_classes = 3  # 目标类别数 F15, F35, X-47B
 
 def build_gp_covariance(N=10, d_D=8, epsilon=1e-5):
     """
-    构建多尺度多核高斯过程先验的协方差矩阵 Sigma_G   
+    构建高斯过程先验的协方差矩阵 Sigma_G   
     Args:
         N: 时间窗口的数量 (默认为 10)
         d_D: 动态特征的维度 (默认为 8)
@@ -57,7 +57,7 @@ def build_gp_covariance(N=10, d_D=8, epsilon=1e-5):
         kernels.append(k_rbf)
         kernels.append(k_cauchy)
         
-    # 按照特征维度拼接 (物理意义对应公式13中的 ⊕) 
+    # 按照特征维度拼接 (公式13中的 ⊕) 
     # 将 8 个 [10, 10] 的矩阵堆叠起来，得到形状为 [8, 10, 10] 的张量
     Sigma_G = torch.stack(kernels, dim=0)
     
