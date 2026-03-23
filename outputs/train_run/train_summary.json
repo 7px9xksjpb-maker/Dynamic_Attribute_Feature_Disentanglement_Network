@@ -1,0 +1,25 @@
+{
+  "checkpoint": "outputs\\train_run\\udafd_checkpoint.pt",
+  "train_h5": "h5_car_seq/seq_data.h5",
+  "num_classes": 10,
+  "input_dim": 512,
+  "num_samples": 1510,
+  "cfg": {
+    "T": 30,
+    "N": 10,
+    "l": 9,
+    "d_D": 8,
+    "d_A": 8,
+    "beta": 0.1,
+    "lambda_reg": 0.5,
+    "lr_1": 0.001,
+    "lr_2": 0.001,
+    "batch_size": 128,
+    "dynamic_hidden_dim": 64,
+    "attribute_hidden_dim": 64,
+    "decoder_c1": 128,
+    "decoder_c2": 128
+  },
+  "seed": 42,
+  "device": "cuda"
+}
