@@ -20,7 +20,7 @@ class UDAFDConfig:
     d_D: int = 8
     d_A: int = 8
     beta: float = 0.1
-    lambda_reg: float = 0.5
+    lambda_reg: float = 0.2
     lr_1: float = 1e-3
     lr_2: float = 1e-3
     batch_size: int = 128
@@ -472,10 +472,10 @@ class HRRP_RecNet(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(cfg.d_A, 32),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.2),
             nn.Linear(32, 16),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.2),
             nn.Linear(16, num_classes),
         )
 

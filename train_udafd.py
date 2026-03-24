@@ -8,9 +8,9 @@ import torch
 from udafd_pytorch_flexible import UDAFDConfig, create_h5_dataloader, train_framework
 
 # ======== 在这里直接填写输入/输出参数 ========
-TRAIN_H5 = 'h5_car_seq/train_seq_data.h5'
-NUM_CLASSES = 10
-OUTPUT_DIR = 'outputs'
+TRAIN_H5 = 'h5_car_seq2/train_seq_data.h5'
+NUM_CLASSES = 4
+OUTPUT_DIR = 'outputs2'
 BATCH_SIZE = 128
 EPOCHS_PHASE1 = 70
 EPOCHS_PHASE2 = 40
@@ -22,7 +22,7 @@ L = 9
 D_D = 8
 D_A = 8
 BETA = 0.1
-LAMBDA_REG = 0.5
+LAMBDA_REG = 0.2
 SEED = 42
 NUM_WORKERS = 0
 DEVICE = 'auto'      # 可选: 'auto', 'cpu', 'cuda'

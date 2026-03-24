@@ -8,10 +8,10 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from udafd_pytorch_flexible import AttributeEncoder, HRRP_RecNet, UDAFDConfig, create_h5_dataloader, extract_attribute_feature
 
 # ======== 在这里直接填写输入/输出参数 ========
-TEST_H5 = 'h5_car_seq/seq_data.h5'
+TEST_H5 = 'h5_car_seq/test_seq_data.h5'
 CHECKPOINT = 'outputs/udafd_checkpoint.pt'
 OUTPUT_JSON = 'outputs/test_results.json'  # 不想保存可设为 ''
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 NUM_WORKERS = 0
 DEVICE = 'auto'          # 可选: 'auto', 'cpu', 'cuda'
 CROP_MODE = 'center'     # 可选: 'center', 'random_avg'
