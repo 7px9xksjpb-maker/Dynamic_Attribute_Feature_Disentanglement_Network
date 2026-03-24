@@ -9,7 +9,7 @@ from udafd_pytorch_flexible import AttributeEncoder, HRRP_RecNet, UDAFDConfig, c
 
 # ======== 在这里直接填写输入/输出参数 ========
 TEST_H5 = 'h5_car_seq/seq_data.h5'
-CHECKPOINT = 'outputs/train_run/udafd_checkpoint.pt'
+CHECKPOINT = 'outputs/udafd_checkpoint.pt'
 OUTPUT_JSON = 'outputs/test_results.json'  # 不想保存可设为 ''
 BATCH_SIZE = 256
 NUM_WORKERS = 0

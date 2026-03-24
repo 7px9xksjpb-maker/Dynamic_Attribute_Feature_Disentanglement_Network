@@ -28,6 +28,7 @@ class UDAFDConfig:
     attribute_hidden_dim: int = 64
     decoder_c1: int = 128
     decoder_c2: int = 128
+    num_classes: int = 4
 
     @property
     def delta(self) -> int:
@@ -409,7 +410,8 @@ def gaussian_nll(X_true: torch.Tensor, mu_x: torch.Tensor, sigma_x: torch.Tensor
         + 2.0 * torch.log(sigma_x)
         + math.log(2.0 * math.pi)
     )
-    return nll.sum(dim=(1, 2)).mean()
+    # 只按 M 平均，保留 T 上的累计效应
+    return nll.sum(dim=(1, 2)).mean() / X_true.size(2)
 
 
 
@@ -541,7 +543,7 @@ def train_framework(
     if input_dim is None:
         input_dim = inferred_input_dim
     if num_classes is None:
-        num_classes = inferred_num_classes
+        num_classes = cfg.num_classes if cfg.num_classes is not None else inferred_num_classes
 
     enc_D = DynamicEncoder(input_dim=input_dim, cfg=cfg).to(device)
     enc_A = AttributeEncoder(input_dim=input_dim, cfg=cfg).to(device)

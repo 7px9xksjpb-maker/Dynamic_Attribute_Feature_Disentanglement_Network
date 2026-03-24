@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 
 # ======== 在这里直接填写输入参数 ========
-H5_PATH = os.path.join('h5_car_seq', 'seq_data.h5')
+H5_PATH = os.path.join('h5_car_seq', 'train_seq_data.h5')
 # =====================================
 
 

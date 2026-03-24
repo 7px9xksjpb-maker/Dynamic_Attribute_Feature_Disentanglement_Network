@@ -1,12 +1,11 @@
 import json
 import os
 import random
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import h5py
 import numpy as np
 import scipy.io as sio
-
 
 seed = 42
 np.random.seed(seed)
@@ -30,22 +29,44 @@ angle_ranges = [
 ]
 
 file_specs: List[Tuple[str, int]] = [
+   # 类别 0: HondaCivic4dr 的多个俯仰角
     ('HondaCivic4dr_el30.0000.mat', 0),
+    ('HondaCivic4dr_el40.0000.mat', 0),
+    ('HondaCivic4dr_el50.0000.mat', 0),
+    ('HondaCivic4dr_el60.0000.mat', 0),
+    
+    # 类别 1: Mitsubishi 的多个俯仰角
     ('Mitsubishi_el30.0000.mat', 1),
+    ('Mitsubishi_el40.0000.mat', 1),
+    ('Mitsubishi_el50.0000.mat', 1),
+    ('Mitsubishi_el60.0000.mat', 1),
+
+    # 类别 2: Sentra 的多个俯仰角
     ('Sentra_el30.0000.mat', 2),
+    ('Sentra_el40.0000.mat', 2),
+    ('Sentra_el50.0000.mat', 2),
+    ('Sentra_el60.0000.mat', 2),
+
+    # 类别 3: Camry 的多个俯仰角
     ('Camry_el30.0000.mat', 3),
-    ('Jeep93_el30.0000.mat', 4),
-    ('Jeep99_el30.0000.mat', 5),
-    ('Maxima_el30.0000.mat', 6),
-    ('MazdaMPV_el30.0000.mat', 7),
-    ('ToyotaAvalon_el30.0000.mat', 8),
-    ('ToyotaTacoma_el30.0000.mat', 9),
+    ('Camry_el40.0000.mat', 3),
+    ('Camry_el50.0000.mat', 3),
+    ('Camry_el60.0000.mat', 3),
+
 ]
+    ## 其他类别
+    # ('Jeep93_el30.0000.mat', 4),
+    # ('Jeep99_el30.0000.mat', 5),
+    # ('Maxima_el30.0000.mat', 6),
+    # ('MazdaMPV_el30.0000.mat', 7),
+    # ('ToyotaAvalon_el30.0000.mat', 8),
+    # ('ToyotaTacoma_el30.0000.mat', 9),
 
 # Sequence settings expected by the training code
 sequence_length = 30
 slide_step = 1
 save_mask = True
+train_ratio = 0.7  # 新增：训练集比例
 
 print('--- Configuration ---')
 print(f'original_step_angle = {original_step_angle}')
@@ -54,6 +75,7 @@ print(f'stride              = {stride}')
 print(f'angle_ranges        = {angle_ranges}')
 print(f'sequence_length     = {sequence_length}')
 print(f'slide_step          = {slide_step}')
+print(f'train_ratio         = {train_ratio}')
 print('---------------------\n')
 
 
@@ -73,12 +95,13 @@ def validate_file_specs(specs: Sequence[Tuple[str, int]]) -> None:
         )
         raise ValueError(msg)
 
-
-def l2_normalize_columns(chunk_data: np.ndarray) -> np.ndarray:
+# 修改：计算整体矩阵的 Frobenius 范数进行统一缩放
+def global_normalize(chunk_data: np.ndarray) -> np.ndarray:
     mag = np.abs(chunk_data).astype(np.float32)
-    norms = np.linalg.norm(mag, axis=0, keepdims=True)
-    norms = np.where(norms == 0.0, 1.0, norms)
-    return mag / norms
+    norm_val = np.linalg.norm(mag)  # 计算整个矩阵的 L2 范数
+    if norm_val == 0.0:
+        return mag
+    return mag / norm_val
 
 
 def extract_snapshots_by_ranges(
@@ -108,8 +131,9 @@ def extract_snapshots_by_ranges(
         chunk_data = hrrp_matrix[:, start_idx:end_idx:stride_val]
         if chunk_data.shape[1] == 0:
             continue
-
-        chunk_data = l2_normalize_columns(chunk_data)
+            
+        # 替换为整体归一化
+        chunk_data = global_normalize(chunk_data)
         angles = start_deg + np.arange(chunk_data.shape[1], dtype=np.float32) * target_step
 
         for col in range(chunk_data.shape[1]):
@@ -145,9 +169,6 @@ def build_sliding_sequences(
         seq_y = int(y_list[start])
         seq_z = np.asarray(z_list[start:end], dtype=np.float32)          
         seq_m = np.ones((seq_len, num_bins), dtype=np.float32)
-
-        if len(set(y_list[start:end])) != 1:
-            raise ValueError('A sequence crosses different labels, which should not happen.')
 
         X_seq_list.append(seq_x)
         Y_seq_list.append(seq_y)
@@ -205,24 +226,14 @@ def shuffle_in_unison(*arrays: np.ndarray) -> Tuple[np.ndarray, ...]:
     if not arrays:
         return tuple()
     n = len(arrays[0])
-    for arr in arrays:
-        if len(arr) != n:
-            raise ValueError('All arrays must have the same first dimension for shuffling.')
     indices = np.random.permutation(n)
     return tuple(arr[indices] for arr in arrays)
 
 
-def process_and_save(data_dict: Dict[str, List], filename: str) -> None:
-    if not data_dict['x']:
+def save_h5(x: np.ndarray, y: np.ndarray, z: np.ndarray, m: np.ndarray, filename: str) -> None:
+    if len(x) == 0:
         print(f'Warning: {filename} is empty, skip saving.')
         return
-
-    x = np.asarray(data_dict['x'], dtype=np.float32)   
-    y = np.asarray(data_dict['y'], dtype=np.int64)     
-    z = np.asarray(data_dict['z'], dtype=np.float32)   
-    m = np.asarray(data_dict['mask'], dtype=np.float32)
-
-    x, y, z, m = shuffle_in_unison(x, y, z, m)
 
     save_path = os.path.join(output_dir, filename)
     with h5py.File(save_path, 'w') as f:
@@ -242,11 +253,7 @@ def process_and_save(data_dict: Dict[str, List], filename: str) -> None:
         f.attrs['angle_ranges_json'] = json.dumps(angle_ranges)
 
     print(f'\nSaved: {save_path}')
-    print(f'  x_data shape   = {x.shape}')
-    print(f'  y_data shape   = {y.shape}')
-    print(f'  z_data shape   = {z.shape}')
-    print(f'  mask_data shape= {m.shape}')
-    print(f'  angle example  = {z.min():.4f}° ~ {z.max():.4f}°')
+    print(f'  Samples        = {x.shape[0]}')
 
 
 # ================= 3. Main loop =================
@@ -275,16 +282,32 @@ def main() -> None:
             dataset['y'].extend(y_all)
             dataset['z'].extend(z_all)
             dataset['mask'].extend(m_all)
-            print(f'  -> Extracted sequences: {len(x_all)}')
 
         except Exception as e:
             print(f'Error processing {file_name}: {e}')
 
     print('-' * 40)
-    process_and_save(dataset, 'seq_data.h5')
+    
+    # 转换为 numpy 数组
+    x = np.asarray(dataset['x'], dtype=np.float32)
+    y = np.asarray(dataset['y'], dtype=np.int64)
+    z = np.asarray(dataset['z'], dtype=np.float32)
+    m = np.asarray(dataset['mask'], dtype=np.float32)
+
+    # 统一打乱
+    x, y, z, m = shuffle_in_unison(x, y, z, m)
+
+    # 训练/测试划分 (7:3)
+    split_idx = int(len(x) * train_ratio)
+    
+    x_train, y_train, z_train, m_train = x[:split_idx], y[:split_idx], z[:split_idx], m[:split_idx]
+    x_test, y_test, z_test, m_test = x[split_idx:], y[split_idx:], z[split_idx:], m[split_idx:]
+
+    print(f'Total sequences: {len(x)}')
+    save_h5(x_train, y_train, z_train, m_train, 'train_seq_data.h5')
+    save_h5(x_test, y_test, z_test, m_test, 'test_seq_data.h5')
     print('-' * 40)
     print('Done.')
-
 
 if __name__ == '__main__':
     main()
