@@ -539,7 +539,7 @@ def compute_counterfactual_reg(
     log_q_orig = -0.5 * (F_A_original - mu_A_cf_post).pow(2).sum(dim=1)
     log_q_cf = -0.5 * (F_A_cf - mu_A_cf_post).pow(2).sum(dim=1)
 
-    log_ratio = (log_q_orig - log_q_cf).clamp(min=-30.0, max=30.0)
+    log_ratio = (log_q_orig - log_q_cf).clamp(min=-10.0, max=5.0)
     ratio = torch.exp(log_ratio)
     return ratio.mean()
 
