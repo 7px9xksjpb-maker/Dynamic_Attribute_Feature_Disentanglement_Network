@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-
+from typing import Optional
 
 @dataclass
 class UDAFDConfig:
@@ -375,15 +375,22 @@ def sample_dynamic_features(
     """
     B, N_, d_D_ = mu_D.shape
     U = build_precision_cholesky(gamma_D)
-    precision_q = U.transpose(-1, -2) @ U
-    cov_q = torch.linalg.inv(precision_q)
-
-    L_q = torch.linalg.cholesky(cov_q)
+    
+    # 1. 极其稳定的三角矩阵求逆 (替代 torch.linalg.inv)
+    # 计算 U_inv = U^{-1}
+    I = torch.eye(N_, device=U.device, dtype=U.dtype).expand_as(U)
+    U_inv = torch.linalg.solve_triangular(U, I, upper=True)
+    
+    # 2. 计算协方差矩阵用于 KL 散度计算 (V @ V^T 物理上绝对保证半正定)
+    cov_q = U_inv @ U_inv.transpose(-1, -2)
+    
+    # 3. 直接使用 U_inv 进行重参数化采样，彻底避开 cholesky！
     eps = torch.randn(B, d_D_, N_, 1, device=mu_D.device, dtype=mu_D.dtype)
-
+    
     mu = mu_D.permute(0, 2, 1).unsqueeze(-1)  # [B, d_D, N, 1]
-    z = mu + L_q @ eps
+    z = mu + U_inv @ eps
     F_D = z.squeeze(-1).permute(0, 2, 1)      # [B, N, d_D]
+    
     return F_D, cov_q, U
 
 
@@ -487,11 +494,13 @@ def compute_elbo_loss(
     mu_A: torch.Tensor,
     Sigma_G: torch.Tensor,
     cfg: UDAFDConfig,
+    current_beta: Optional[float] = None,
 ):
+    beta_val = current_beta if current_beta is not None else cfg.beta
     nll = gaussian_nll(X_true, mu_x, sigma_x)
     kl_D = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
     kl_A = compute_kl_attribute(mu_A)
-    elbo = nll + cfg.beta * (kl_D + kl_A)
+    elbo = nll + beta_val * (kl_D + kl_A)
     stats = {
         'nll': float(nll.detach().cpu()),
         'kl_D': float(kl_D.detach().cpu()),
@@ -676,6 +685,8 @@ def train_framework(
 
     Sigma_G = build_gp_covariance(N_=cfg.N, d_D_=cfg.d_D, device=device)
 
+    warmup_epochs = 30
+
     print(
         f'[Init] raw_bins={input_dim} feature_bins={feature_input_dim} '
         f'recon_bins={decoder_output_dim} compressor={'on' if range_compressor is not None else 'off'} '
@@ -690,6 +701,7 @@ def train_framework(
         decoder.train()
 
         running = {'total': 0.0, 'elbo': 0.0, 'reg': 0.0, 'nll': 0.0, 'kl_D': 0.0, 'kl_A': 0.0}
+        current_beta = cfg.beta * min(1.0, epoch / warmup_epochs)
 
         for batch in dataloader:
             if len(batch) == 3:
@@ -744,6 +756,7 @@ def train_framework(
                 mu_A=mu_A,
                 Sigma_G=Sigma_G,
                 cfg=cfg,
+                current_beta=current_beta,
             )
 
             loss_reg = compute_counterfactual_reg(
@@ -769,6 +782,7 @@ def train_framework(
         num_batches = max(1, len(dataloader))
         print(
             f'[Phase1][{epoch+1:03d}/{epochs_phase1}] '
+            f'beta={current_beta:.4f} '
             f'total={running["total"]/num_batches:.4f} '
             f'elbo={running["elbo"]/num_batches:.4f} '
             f'reg={running["reg"]/num_batches:.4f} '
