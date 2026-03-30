@@ -500,7 +500,8 @@ def compute_elbo_loss(
     nll = gaussian_nll(X_true, mu_x, sigma_x)
     kl_D = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
     kl_A = compute_kl_attribute(mu_A)
-    elbo = nll + beta_val * (kl_D + kl_A)
+    beta_A = beta_val * 0.1
+    elbo = nll + beta_val * kl_D + beta_A * kl_A
     stats = {
         'nll': float(nll.detach().cpu()),
         'kl_D': float(kl_D.detach().cpu()),
