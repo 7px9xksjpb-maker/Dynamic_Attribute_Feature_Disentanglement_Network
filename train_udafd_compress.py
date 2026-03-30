@@ -8,9 +8,9 @@ import torch
 from udafd_compress128 import UDAFDConfig, create_h5_dataloader, train_framework
 
 # ======== 在这里直接填写输入/输出参数 ========
-TRAIN_H5 = 'h5_car_seq3/train_seq_data.h5'
+TRAIN_H5 = 'h5_car_seq2/train_seq_data.h5'
 NUM_CLASSES = 4
-OUTPUT_DIR = 'outputs3'
+OUTPUT_DIR = 'outputs2_compress'
 BATCH_SIZE = 128
 EPOCHS_PHASE1 = 70
 EPOCHS_PHASE2 = 40
@@ -26,6 +26,14 @@ LAMBDA_REG = 0.2
 SEED = 42
 NUM_WORKERS = 0
 DEVICE = 'auto'      # 可选: 'auto', 'cpu', 'cuda'
+
+# ======== Compress Config ========
+USE_RANGE_COMPRESSOR = True
+COMPRESSED_BINS = 128
+COMPRESSOR_HIDDEN_CHANNELS = 32
+COMPRESSOR_KERNEL_SIZE = 5
+COMPRESSOR_USE_SKIP = True
+RECONSTRUCTION_MODE = 'original' # or 'compressed'
 # ==========================================
 
 
@@ -58,6 +66,12 @@ def main():
         lr_1=LR_1,
         lr_2=LR_2,
         batch_size=BATCH_SIZE,
+        use_range_compressor=USE_RANGE_COMPRESSOR,
+        compressed_bins=COMPRESSED_BINS,
+        compressor_hidden_channels=COMPRESSOR_HIDDEN_CHANNELS,
+        compressor_kernel_size=COMPRESSOR_KERNEL_SIZE,
+        compressor_use_skip=COMPRESSOR_USE_SKIP,
+        reconstruction_mode=RECONSTRUCTION_MODE,
     )
 
     dataset, dataloader = create_h5_dataloader(

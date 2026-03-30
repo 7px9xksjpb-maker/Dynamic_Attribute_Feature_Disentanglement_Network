@@ -5,12 +5,12 @@ import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
-from udafd_compress128 import AttributeEncoder, HRRP_RecNet, UDAFDConfig, create_h5_dataloader, extract_attribute_feature
+from udafd_sparse_attn import AttributeEncoder, HRRP_RecNet, SparseAttentionCompressor, UDAFDConfig, create_h5_dataloader, extract_attribute_feature
 
 # ======== 在这里直接填写输入/输出参数 ========
 TEST_H5 = 'h5_car_seq3/test_seq_data.h5'
-CHECKPOINT = 'outputs3/udafd_checkpoint.pt'
-OUTPUT_JSON = 'outputs3/test_results.json'  # 不想保存可设为 ''
+CHECKPOINT = 'outputs3_sparse_attn/udafd_checkpoint.pt'
+OUTPUT_JSON = 'outputs3_sparse_attn/test_results.json'  # 不想保存可设为 ''
 BATCH_SIZE = 128
 NUM_WORKERS = 0
 DEVICE = 'auto'          # 可选: 'auto', 'cpu', 'cuda'
@@ -67,7 +67,7 @@ def main():
 
     ckpt = torch.load(CHECKPOINT, map_location=device)  
     cfg = UDAFDConfig(**ckpt['cfg'])
-    input_dim = int(ckpt['input_dim'])
+    raw_input_dim = int(ckpt['input_dim'])
     num_classes = int(ckpt['num_classes'])
 
     dataset, dataloader = create_h5_dataloader(
@@ -77,13 +77,29 @@ def main():
         num_workers=NUM_WORKERS,
     )
 
-    if dataset.num_bins != input_dim:
-        raise ValueError(f'Checkpoint input_dim={input_dim}, but test h5 has M={dataset.num_bins}.')
+    if dataset.num_bins != raw_input_dim:
+        raise ValueError(f'Checkpoint input_dim={raw_input_dim}, but test h5 has M={dataset.num_bins}.')
 
-    enc_A = AttributeEncoder(input_dim=input_dim, cfg=cfg).to(device)
+    # Fix: initialize enc_A with the correct feature_input_dim and range_compressor
+    feature_input_dim = raw_input_dim
+    range_compressor = None
+    if getattr(cfg, 'use_sparse_attention', False) and raw_input_dim > getattr(cfg, 'compressed_bins', 128):
+        range_compressor = SparseAttentionCompressor(
+            input_bins=raw_input_dim,
+            output_bins=cfg.compressed_bins,
+            hidden_channels=cfg.attention_hidden_channels,
+        )
+        feature_input_dim = cfg.compressed_bins
+
+    enc_A = AttributeEncoder(input_dim=feature_input_dim, cfg=cfg).to(device)
+    if range_compressor is not None:
+        enc_A.range_compressor = range_compressor.to(device)
+
     rec_net = HRRP_RecNet(num_classes=num_classes, cfg=cfg).to(device)
+    
     enc_A.load_state_dict(ckpt['enc_A'])
     rec_net.load_state_dict(ckpt['rec_net'])
+
     enc_A.eval()
     rec_net.eval()
 
@@ -99,7 +115,7 @@ def main():
     results['checkpoint'] = CHECKPOINT
     results['test_h5'] = TEST_H5
     results['num_classes'] = num_classes
-    results['input_dim'] = input_dim
+    results['input_dim'] = raw_input_dim
     results['cfg'] = cfg.__dict__
 
     print(f"Accuracy: {results['accuracy']:.4f}")

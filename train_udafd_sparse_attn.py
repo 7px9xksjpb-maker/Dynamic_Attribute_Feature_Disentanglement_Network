@@ -5,12 +5,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from udafd_compress128 import UDAFDConfig, create_h5_dataloader, train_framework
+from udafd_sparse_attn import UDAFDConfig, create_h5_dataloader, train_framework
 
 # ======== 在这里直接填写输入/输出参数 ========
-TRAIN_H5 = 'h5_car_seq3/train_seq_data.h5'
+TRAIN_H5 = 'h5_car_seq2/train_seq_data.h5'
 NUM_CLASSES = 4
-OUTPUT_DIR = 'outputs3'
+OUTPUT_DIR = 'outputs2_sparse_attn'
 BATCH_SIZE = 128
 EPOCHS_PHASE1 = 70
 EPOCHS_PHASE2 = 40
@@ -26,6 +26,12 @@ LAMBDA_REG = 0.2
 SEED = 42
 NUM_WORKERS = 0
 DEVICE = 'auto'      # 可选: 'auto', 'cpu', 'cuda'
+
+# ======== Compress Config ========
+USE_SPARSE_ATTENTION = True
+COMPRESSED_BINS = 128
+ATTENTION_HIDDEN_CHANNELS = 32
+RECONSTRUCTION_MODE = 'original' # or 'compressed'
 # ==========================================
 
 
@@ -58,6 +64,10 @@ def main():
         lr_1=LR_1,
         lr_2=LR_2,
         batch_size=BATCH_SIZE,
+        use_sparse_attention=USE_SPARSE_ATTENTION,
+        compressed_bins=COMPRESSED_BINS,
+        attention_hidden_channels=ATTENTION_HIDDEN_CHANNELS,
+        reconstruction_mode=RECONSTRUCTION_MODE,
     )
 
     dataset, dataloader = create_h5_dataloader(
