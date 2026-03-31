@@ -353,12 +353,12 @@ def compute_kl_dynamic(
         kl_d = 0.5 * (trace_term + maha_term - N_ + logdet_p - logdet_q[:, d])
         kl_all.append(kl_d)
 
-    return torch.stack(kl_all, dim=1).sum(dim=1).mean()
+    return torch.stack(kl_all, dim=1).mean()
 
 
 
 def compute_kl_attribute(mu_A: torch.Tensor) -> torch.Tensor:
-    return 0.5 * mu_A.pow(2).sum(dim=1).mean()
+    return 0.5 * mu_A.pow(2).mean()
 
 
 class Decoder(nn.Module):
@@ -410,8 +410,7 @@ def gaussian_nll(X_true: torch.Tensor, mu_x: torch.Tensor, sigma_x: torch.Tensor
         + 2.0 * torch.log(sigma_x)
         + math.log(2.0 * math.pi)
     )
-    # 只按 M 平均，保留 T 上的累计效应
-    return nll.sum(dim=(1, 2)).mean() / X_true.size(2)
+    return nll.mean()
 
 
 
