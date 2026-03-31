@@ -422,12 +422,12 @@ def compute_kl_dynamic(
         kl_d = 0.5 * (trace_term + maha_term - N_ + logdet_p - logdet_q[:, d])
         kl_all.append(kl_d)
 
-    return torch.stack(kl_all, dim=1).sum(dim=1).mean()
+    return torch.stack(kl_all, dim=1).mean()
 
 
 
 def compute_kl_attribute(mu_A: torch.Tensor) -> torch.Tensor:
-    return 0.5 * mu_A.pow(2).sum(dim=1).mean()
+    return 0.5 * mu_A.pow(2).mean()
 
 
 class Decoder(nn.Module):
@@ -480,7 +480,7 @@ def gaussian_nll(X_true: torch.Tensor, mu_x: torch.Tensor, sigma_x: torch.Tensor
         + 2.0 * torch.log(sigma_x)
         + math.log(2.0 * math.pi)
     )
-    return nll.sum(dim=(1, 2)).mean()
+    return nll.mean()
 
 
 
@@ -500,7 +500,7 @@ def compute_elbo_loss(
     nll = gaussian_nll(X_true, mu_x, sigma_x)
     kl_D = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
     kl_A = compute_kl_attribute(mu_A)
-    beta_A = beta_val * 0.1
+    beta_A = beta_val * 0.05
     elbo = nll + beta_val * kl_D + beta_A * kl_A
     stats = {
         'nll': float(nll.detach().cpu()),
@@ -543,6 +543,38 @@ def compute_counterfactual_reg(
     ratio = torch.exp(log_ratio)
     return ratio.mean()
 
+# def compute_counterfactual_reg(
+#     attribute_encoder: AttributeEncoder,
+#     decoder: Decoder,
+#     F_D: torch.Tensor,
+#     F_A_original: torch.Tensor, # 保留参数名以兼容调用
+#     cfg: UDAFDConfig,
+#     range_compressor: Optional[SparseAttentionCompressor] = None,
+# ) -> torch.Tensor:
+#     B = F_D.size(0)
+    
+#     # 1. 采样反事实属性 (Dummy Attribute)
+#     F_A_cf = torch.randn(B, cfg.d_A, device=F_D.device, dtype=F_D.dtype)
+#     F_A_cf_rep = F_A_cf.unsqueeze(1).expand(-1, cfg.N, -1)
+
+#     # 2. 生成反事实序列
+#     mu_x_cf, _ = decoder(F_D, F_A_cf_rep)
+    
+#     # 3. 让编码器重新看这个新序列
+#     mu_x_cf_for_attr = adapt_sequence_for_attribute_encoder(
+#         mu_x_cf,
+#         attribute_encoder=attribute_encoder,
+#         range_compressor=range_compressor,
+#     )
+#     X_cf_crop, _ = crop_subsequence(mu_x_cf_for_attr, crop_len=cfg.l, random_crop=True)
+
+#     # 4. 提取属性
+#     mu_A_cf_post = attribute_encoder(X_cf_crop)
+    
+#     # 5. 【终极修复】使用 MSE 强制闭环通信，完全替代不稳定的概率比值
+#     loss_reg = F.mse_loss(mu_A_cf_post, F_A_cf)
+    
+#     return loss_reg
 
 class HRRP_RecNet(nn.Module):
     def __init__(self, num_classes: int, cfg: UDAFDConfig):
@@ -703,6 +735,7 @@ def train_framework(
 
         running = {'total': 0.0, 'elbo': 0.0, 'reg': 0.0, 'nll': 0.0, 'kl_D': 0.0, 'kl_A': 0.0}
         current_beta = cfg.beta * min(1.0, epoch / warmup_epochs)
+        current_lambda = cfg.lambda_reg * min(1.0, epoch / warmup_epochs)
 
         for batch in dataloader:
             if len(batch) == 3:
@@ -769,7 +802,7 @@ def train_framework(
                 range_compressor=range_compressor,
             )
 
-            loss = loss_elbo + cfg.lambda_reg * loss_reg
+            loss = loss_elbo + current_lambda * loss_reg
             loss.backward()
             optimizer_UDAFD.step()
 
