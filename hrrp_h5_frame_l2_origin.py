@@ -83,11 +83,18 @@ def validate_file_specs(specs: Sequence[Tuple[str, int]]) -> None:
 
 
 def l2_normalize_columns(chunk_data: np.ndarray) -> np.ndarray:
-    """原始逐帧 L2 归一化：对每个角度快拍单独归一化。"""
+    """改进版：Log1p 变换 + 列级 Min-Max 归一化"""
+    # 1. 取绝对值
     mag = np.abs(chunk_data).astype(np.float32)
-    norms = np.linalg.norm(mag, axis=0, keepdims=True)
-    norms = np.where(norms == 0.0, 1.0, norms)
-    return mag / norms
+    # 2. 对数变换，压缩雷达回波中极其悬殊的尖峰 (非常关键)
+    mag = np.log1p(mag) 
+    
+    # 3. 逐列进行 Min-Max 归一化到 [0, 1]
+    col_min = mag.min(axis=0, keepdims=True)
+    col_max = mag.max(axis=0, keepdims=True)
+    denom = np.where((col_max - col_min) == 0, 1.0, col_max - col_min)
+    
+    return (mag - col_min) / denom
 
 
 def extract_snapshots_by_ranges(

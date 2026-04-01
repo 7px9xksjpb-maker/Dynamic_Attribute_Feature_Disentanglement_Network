@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from udafd_compress128 import UDAFDConfig, create_h5_dataloader, train_framework
+from udafd_pytorch_flexible import UDAFDConfig, create_h5_dataloader, train_framework
 
 # ======== 在这里直接填写输入/输出参数 ========
 TRAIN_H5 = 'h5_car_seq3/train_seq_data.h5'
@@ -21,7 +21,7 @@ N = 10
 L = 9
 D_D = 8
 D_A = 8
-BETA = 0.1
+BETA = 0.01
 LAMBDA_REG = 0.2
 SEED = 42
 NUM_WORKERS = 0

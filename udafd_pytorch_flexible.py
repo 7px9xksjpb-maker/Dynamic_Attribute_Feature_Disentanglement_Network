@@ -19,7 +19,8 @@ class UDAFDConfig:
     l: int = 9
     d_D: int = 8
     d_A: int = 8
-    beta: float = 0.1
+    beta_D: float = 0.1
+    beta_A: float = 0.005
     lambda_reg: float = 0.2
     lr_1: float = 1e-3
     lr_2: float = 1e-3
@@ -331,7 +332,7 @@ def compute_kl_dynamic(
     cov_q: torch.Tensor,
     U: torch.Tensor,
     Sigma_G: torch.Tensor,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     KL(q(F_D|X) || p(F_D)) with a GP prior over the N windows.
     """
@@ -353,12 +354,22 @@ def compute_kl_dynamic(
         kl_d = 0.5 * (trace_term + maha_term - N_ + logdet_p - logdet_q[:, d])
         kl_all.append(kl_d)
 
-    return torch.stack(kl_all, dim=1).mean()
+    kl_d_tensor = torch.stack(kl_all, dim=1) # [B, d_D]
+    
+    total_kl = kl_d_tensor.sum(dim=1).mean()
+    per_dim_kl = kl_d_tensor.mean(dim=0)     # [d_D]
+    
+    return total_kl, per_dim_kl
 
 
 
-def compute_kl_attribute(mu_A: torch.Tensor) -> torch.Tensor:
-    return 0.5 * mu_A.pow(2).mean()
+def compute_kl_attribute(mu_A: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    kl_a_tensor = 0.5 * mu_A.pow(2)          # [B, d_A]
+    
+    total_kl = kl_a_tensor.sum(dim=1).mean()
+    per_dim_kl = kl_a_tensor.mean(dim=0)     # [d_A]
+    
+    return total_kl, per_dim_kl
 
 
 class Decoder(nn.Module):
@@ -424,16 +435,21 @@ def compute_elbo_loss(
     mu_A: torch.Tensor,
     Sigma_G: torch.Tensor,
     cfg: UDAFDConfig,
+    current_beta_D: float,
+    current_beta_A: float,
 ):
     nll = gaussian_nll(X_true, mu_x, sigma_x)
-    kl_D = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
-    kl_A = compute_kl_attribute(mu_A)
-    elbo = nll + cfg.beta * (kl_D + kl_A)
+    kl_D, kl_D_per_dim = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
+    kl_A, kl_A_per_dim = compute_kl_attribute(mu_A)
+    
+    elbo = nll + current_beta_D * kl_D + current_beta_A * kl_A
     stats = {
         'nll': float(nll.detach().cpu()),
         'kl_D': float(kl_D.detach().cpu()),
         'kl_A': float(kl_A.detach().cpu()),
         'elbo': float(elbo.detach().cpu()),
+        'kl_D_per_dim': kl_D_per_dim.detach().cpu().numpy(),
+        'kl_A_per_dim': kl_A_per_dim.detach().cpu().numpy(),
     }
     return elbo, stats
 
@@ -557,12 +573,17 @@ def train_framework(
 
     Sigma_G = build_gp_covariance(N_=cfg.N, d_D_=cfg.d_D, device=device)
 
+    warmup_epochs = 50
+
     for epoch in range(epochs_phase1):
         enc_D.train()
         enc_A.train()
         decoder.train()
 
         running = {'total': 0.0, 'elbo': 0.0, 'reg': 0.0, 'nll': 0.0, 'kl_D': 0.0, 'kl_A': 0.0}
+        current_beta_D = cfg.beta_D * min(1.0, epoch / warmup_epochs)
+        current_beta_A = cfg.beta_A * min(1.0, epoch / warmup_epochs)
+        current_lambda = cfg.lambda_reg * min(1.0, epoch / warmup_epochs)
 
         for batch in dataloader:
             if len(batch) == 3:
@@ -607,6 +628,8 @@ def train_framework(
                 mu_A=mu_A,
                 Sigma_G=Sigma_G,
                 cfg=cfg,
+                current_beta_D=current_beta_D,
+                current_beta_A=current_beta_A,
             )
 
             loss_reg = compute_counterfactual_reg(
@@ -617,7 +640,7 @@ def train_framework(
                 cfg=cfg,
             )
 
-            loss = loss_elbo + cfg.lambda_reg * loss_reg
+            loss = loss_elbo + current_lambda * loss_reg
             loss.backward()
             optimizer_UDAFD.step()
 
@@ -629,14 +652,21 @@ def train_framework(
             running['kl_A'] += stats['kl_A']
 
         num_batches = max(1, len(dataloader))
+        
+        with torch.no_grad():
+            var_mu_A = mu_A.var(dim=0).cpu().numpy()
+            var_mu_D = mu_D.var(dim=(0, 1)).cpu().numpy()
+            pred_var_D = cov_q_D.diagonal(dim1=-2, dim2=-1).mean(dim=(0, 2)).cpu().numpy()
+
         print(
-            f'[Phase1][{epoch+1:03d}/{epochs_phase1}] '
-            f'total={running["total"]/num_batches:.4f} '
-            f'elbo={running["elbo"]/num_batches:.4f} '
-            f'reg={running["reg"]/num_batches:.4f} '
-            f'nll={running["nll"]/num_batches:.4f} '
-            f'klD={running["kl_D"]/num_batches:.4f} '
-            f'klA={running["kl_A"]/num_batches:.4f}'
+            f'[Phase1][{epoch+1:03d}/{epochs_phase1}] \n'
+            f'  Loss  -> elbo={running["elbo"]/num_batches:.2f} | nll={running["nll"]/num_batches:.2f} | '
+            f'klD={running["kl_D"]/num_batches:.2f} | klA={running["kl_A"]/num_batches:.2f} | reg={running["reg"]/num_batches:.4f}\n'
+            f'  [A_Dim] KL: {np.array2string(stats["kl_A_per_dim"], precision=3, suppress_small=True)}\n'
+            f'  [A_Dim] Var(mu): {np.array2string(var_mu_A, precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] KL: {np.array2string(stats["kl_D_per_dim"], precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] Var(mu): {np.array2string(var_mu_D, precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] E[sigma^2]: {np.array2string(pred_var_D, precision=3, suppress_small=True)}'
         )
 
     for p in enc_A.parameters():

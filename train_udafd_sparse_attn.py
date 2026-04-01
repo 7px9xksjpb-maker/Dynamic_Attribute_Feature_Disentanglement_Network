@@ -8,21 +8,22 @@ import torch
 from udafd_sparse_attn import UDAFDConfig, create_h5_dataloader, train_framework
 
 # ======== 在这里直接填写输入/输出参数 ========
-TRAIN_H5 = 'h5_car_seq2/train_seq_data.h5'
+TRAIN_H5 = 'h5_car_seq3/train_seq_data.h5'
 NUM_CLASSES = 4
-OUTPUT_DIR = 'outputs2_sparse_attn'
+OUTPUT_DIR = 'outputs3_sparse_attn'
 BATCH_SIZE = 128
-EPOCHS_PHASE1 = 120
+EPOCHS_PHASE1 = 70
 EPOCHS_PHASE2 = 40
-LR_1 = 1e-3
+LR_1 = 1e-4
 LR_2 = 1e-3
 T = 30
 N = 10
 L = 9
-D_D = 4
+D_D = 8
 D_A = 8
-BETA = 0.1
-LAMBDA_REG = 0.01
+BETA_D = 1e-3
+BETA_A = 0.001
+LAMBDA_REG = 0.5
 SEED = 42
 NUM_WORKERS = 0
 DEVICE = 'auto'      # 可选: 'auto', 'cpu', 'cuda'
@@ -31,7 +32,7 @@ DEVICE = 'auto'      # 可选: 'auto', 'cpu', 'cuda'
 USE_SPARSE_ATTENTION = True
 COMPRESSED_BINS = 128
 ATTENTION_HIDDEN_CHANNELS = 32
-RECONSTRUCTION_MODE = 'original' # or 'compressed'
+RECONSTRUCTION_MODE = 'original' # 'original'or 'compressed'
 # ==========================================
 
 
@@ -59,7 +60,8 @@ def main():
         l=L,
         d_D=D_D,
         d_A=D_A,
-        beta=BETA,
+        beta_D=BETA_D,
+        beta_A=BETA_A,
         lambda_reg=LAMBDA_REG,
         lr_1=LR_1,
         lr_2=LR_2,

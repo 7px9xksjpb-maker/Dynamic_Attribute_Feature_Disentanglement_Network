@@ -19,7 +19,8 @@ class UDAFDConfig:
     l: int = 9
     d_D: int = 8
     d_A: int = 8
-    beta: float = 0.1
+    beta_D: float = 0.1
+    beta_A: float = 0.005
     lambda_reg: float = 0.5
     lr_1: float = 1e-3
     lr_2: float = 1e-3
@@ -222,7 +223,7 @@ def adapt_sequence_for_attribute_encoder(
 def build_gp_covariance(
     N_: int,
     d_D_: int,
-    epsilon: float = 1e-5,
+    epsilon: float = 0.1,
     device: Optional[torch.device] = None,
 ) -> torch.Tensor:
     """
@@ -287,7 +288,7 @@ class DynamicEncoder(nn.Module):
         s, _ = self.lstm(x)
         s = torch.sigmoid(s[:, -1, :])
 
-        r = F.relu(self.fc2(F.relu(self.fc1(s))))
+        r = F.leaky_relu(self.fc2(F.leaky_relu(self.fc1(s), 0.1)), 0.1)
         mu_D = self.fc_mu(r).view(B, N_, self.d_D)
         gamma_D = F.softplus(self.fc_gamma(r)).view(B, N_, self.d_D, 2) + 1e-4
         return mu_D, gamma_D
@@ -329,7 +330,7 @@ class AttributeEncoder(nn.Module):
         s, _ = self.lstm(x)
         s = torch.sigmoid(s[:, -1, :])
 
-        r = F.relu(self.fc2(F.relu(self.fc1(s))))
+        r = F.leaky_relu(self.fc2(F.leaky_relu(self.fc1(s), 0.1)), 0.1)
         mu_A = self.fc_mu(r)
         return mu_A
 
@@ -400,7 +401,7 @@ def compute_kl_dynamic(
     cov_q: torch.Tensor,
     U: torch.Tensor,
     Sigma_G: torch.Tensor,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     KL(q(F_D|X) || p(F_D)) with a GP prior over the N windows.
     """
@@ -422,12 +423,22 @@ def compute_kl_dynamic(
         kl_d = 0.5 * (trace_term + maha_term - N_ + logdet_p - logdet_q[:, d])
         kl_all.append(kl_d)
 
-    return torch.stack(kl_all, dim=1).mean()
+    kl_d_tensor = torch.stack(kl_all, dim=1) # [B, d_D]
+    
+    total_kl = kl_d_tensor.sum(dim=1).mean()
+    per_dim_kl = kl_d_tensor.mean(dim=0)     # [d_D]
+    
+    return total_kl, per_dim_kl
 
 
 
-def compute_kl_attribute(mu_A: torch.Tensor) -> torch.Tensor:
-    return 0.5 * mu_A.pow(2).mean()
+def compute_kl_attribute(mu_A: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    kl_a_tensor = 0.5 * mu_A.pow(2)          # [B, d_A]
+    
+    total_kl = kl_a_tensor.sum(dim=1).mean()
+    per_dim_kl = kl_a_tensor.mean(dim=0)     # [d_A]
+    
+    return total_kl, per_dim_kl
 
 
 class Decoder(nn.Module):
@@ -473,14 +484,11 @@ class Decoder(nn.Module):
 
 
 
-def gaussian_nll(X_true: torch.Tensor, mu_x: torch.Tensor, sigma_x: torch.Tensor) -> torch.Tensor:
-    sigma_x = sigma_x.clamp_min(1e-4)
-    nll = 0.5 * (
-        ((X_true - mu_x) / sigma_x).pow(2)
-        + 2.0 * torch.log(sigma_x)
-        + math.log(2.0 * math.pi)
-    )
-    return nll.mean()
+def gaussian_nll(X_true: torch.Tensor, mu_x: torch.Tensor) -> torch.Tensor:
+    # 彻底抛弃 sigma_x，直接计算 MSE，并按序列长度和特征维度求和，在 Batch 维求平均
+    # 这样得到的重构 Loss 尺度适中，大概在几十到几百之间
+    mse = F.mse_loss(mu_x, X_true, reduction='none')
+    return mse.sum(dim=(1, 2)).mean()
 
 
 
@@ -494,19 +502,25 @@ def compute_elbo_loss(
     mu_A: torch.Tensor,
     Sigma_G: torch.Tensor,
     cfg: UDAFDConfig,
-    current_beta: Optional[float] = None,
+    current_beta_D: float,
+    current_beta_A: float,
 ):
-    beta_val = current_beta if current_beta is not None else cfg.beta
-    nll = gaussian_nll(X_true, mu_x, sigma_x)
-    kl_D = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
-    kl_A = compute_kl_attribute(mu_A)
-    beta_A = beta_val * 0.05
-    elbo = nll + beta_val * kl_D + beta_A * kl_A
+    # 1. 计算重构损失 (MSE)
+    nll = gaussian_nll(X_true, mu_x) # 注意这里去掉了 sigma_x
+    
+    # 2. 计算 KL 散度
+    kl_D, kl_D_per_dim = compute_kl_dynamic(mu_D, cov_q_D, U_D, Sigma_G)
+    kl_A, kl_A_per_dim = compute_kl_attribute(mu_A)
+    
+    # 3. 总 Loss
+    elbo = nll + current_beta_D * kl_D + current_beta_A * kl_A
     stats = {
-        'nll': float(nll.detach().cpu()),
+        'nll': float(nll.detach().cpu()), # 现在记录的是真实的 MSE 重构误差
         'kl_D': float(kl_D.detach().cpu()),
         'kl_A': float(kl_A.detach().cpu()),
         'elbo': float(elbo.detach().cpu()),
+        'kl_D_per_dim': kl_D_per_dim.detach().cpu().numpy(),
+        'kl_A_per_dim': kl_A_per_dim.detach().cpu().numpy(),
     }
     return elbo, stats
 
@@ -718,7 +732,7 @@ def train_framework(
 
     Sigma_G = build_gp_covariance(N_=cfg.N, d_D_=cfg.d_D, device=device)
 
-    warmup_epochs = 30
+    warmup_epochs = 50
 
     print(
         f'[Init] raw_bins={input_dim} feature_bins={feature_input_dim} '
@@ -734,7 +748,8 @@ def train_framework(
         decoder.train()
 
         running = {'total': 0.0, 'elbo': 0.0, 'reg': 0.0, 'nll': 0.0, 'kl_D': 0.0, 'kl_A': 0.0}
-        current_beta = cfg.beta * min(1.0, epoch / warmup_epochs)
+        current_beta_D = cfg.beta_D * min(1.0, epoch / warmup_epochs)
+        current_beta_A = cfg.beta_A * min(1.0, epoch / warmup_epochs)
         current_lambda = cfg.lambda_reg * min(1.0, epoch / warmup_epochs)
 
         for batch in dataloader:
@@ -790,7 +805,8 @@ def train_framework(
                 mu_A=mu_A,
                 Sigma_G=Sigma_G,
                 cfg=cfg,
-                current_beta=current_beta,
+                current_beta_D=current_beta_D,
+                current_beta_A=current_beta_A,
             )
 
             loss_reg = compute_counterfactual_reg(
@@ -804,6 +820,8 @@ def train_framework(
 
             loss = loss_elbo + current_lambda * loss_reg
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(enc_D.parameters(), max_norm=5.0)
+            torch.nn.utils.clip_grad_norm_(enc_A.parameters(), max_norm=5.0)
             optimizer_UDAFD.step()
 
             running['total'] += float(loss.detach().cpu())
@@ -814,15 +832,21 @@ def train_framework(
             running['kl_A'] += stats['kl_A']
 
         num_batches = max(1, len(dataloader))
+        
+        with torch.no_grad():
+            var_mu_A = mu_A.var(dim=0).cpu().numpy()
+            var_mu_D = mu_D.var(dim=(0, 1)).cpu().numpy()
+            pred_var_D = cov_q_D.diagonal(dim1=-2, dim2=-1).mean(dim=(0, 2)).cpu().numpy()
+
         print(
-            f'[Phase1][{epoch+1:03d}/{epochs_phase1}] '
-            f'beta={current_beta:.4f} '
-            f'total={running["total"]/num_batches:.4f} '
-            f'elbo={running["elbo"]/num_batches:.4f} '
-            f'reg={running["reg"]/num_batches:.4f} '
-            f'nll={running["nll"]/num_batches:.4f} '
-            f'klD={running["kl_D"]/num_batches:.4f} '
-            f'klA={running["kl_A"]/num_batches:.4f}'
+            f'[Phase1][{epoch+1:03d}/{epochs_phase1}] \n'
+            f'  Loss  -> elbo={running["elbo"]/num_batches:.2f} | nll={running["nll"]/num_batches:.2f} | '
+            f'klD={running["kl_D"]/num_batches:.2f} | klA={running["kl_A"]/num_batches:.2f} | reg={running["reg"]/num_batches:.4f}\n'
+            f'  [A_Dim] KL: {np.array2string(stats["kl_A_per_dim"], precision=3, suppress_small=True)}\n'
+            f'  [A_Dim] Var(mu): {np.array2string(var_mu_A, precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] KL: {np.array2string(stats["kl_D_per_dim"], precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] Var(mu): {np.array2string(var_mu_D, precision=3, suppress_small=True)}\n'
+            f'  [D_Dim] E[sigma^2]: {np.array2string(pred_var_D, precision=3, suppress_small=True)}'
         )
 
     if range_compressor is not None:
@@ -831,13 +855,19 @@ def train_framework(
         range_compressor.eval()
 
     for p in enc_A.parameters():
-        p.requires_grad = False
-    enc_A.eval()
+        p.requires_grad = True
+    enc_A.train()
 
     criterion = nn.CrossEntropyLoss()
+    
+    optimizer_RecNet = optim.Adam([
+        {'params': rec_net.parameters(), 'lr': cfg.lr_2},
+        {'params': enc_A.parameters(), 'lr': cfg.lr_2 * 0.1} 
+    ])
 
     for epoch in range(epochs_phase2):
         rec_net.train()
+        enc_A.train()
         running_ce = 0.0
 
         for batch in dataloader:
@@ -850,14 +880,14 @@ def train_framework(
             batch_Y = batch_Y.to(device)
 
             optimizer_RecNet.zero_grad()
-            with torch.no_grad():
-                F_A_feat = extract_attribute_feature(
-                    enc_A,
-                    batch_X,
-                    cfg=cfg,
-                    crop_mode='center',
-                    range_compressor=range_compressor,
-                )
+            
+            F_A_feat = extract_attribute_feature(
+                enc_A,
+                batch_X,
+                cfg=cfg,
+                crop_mode='center',
+                range_compressor=range_compressor,
+            )
 
             logits = rec_net(F_A_feat)
             loss_ce = criterion(logits, batch_Y)
